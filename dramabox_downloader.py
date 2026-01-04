@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import requests
 import pandas as pd
@@ -8,6 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Force UTF-8 encoding for stdout/stderr to avoid charmap errors on Windows
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass
+        
 # --- KONFIGURASI ---
 HISTORY_FILE = "download_history.xlsx"
 # --- KONFIGURASI ---
