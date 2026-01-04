@@ -198,10 +198,9 @@ def process_book_parallel(book_data):
     book_name = book_info.get("bookName", book_info.get("title", "Unknown"))
     total_chapters = len(chapters)
 
-    # 2. Folder Setup (Parent Directory to scraping_tools)
+    # 2. Folder Setup (Current Directory)
     current_dir = os.getcwd()
-    parent_dir = os.path.dirname(current_dir) # Naik satu level
-    target_folder = os.path.join(parent_dir, real_book_id)
+    target_folder = os.path.join(current_dir, real_book_id)
     
     if not os.path.exists(target_folder):
         os.makedirs(target_folder)
