@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import json
 import pandas as pd
@@ -33,6 +34,12 @@ class DramaboxScraper:
     def _save_history(self):
         with open(self.history_file, 'w') as f:
             json.dump(self.history, f, indent=4)
+
+    def _clean_text(self, text: Any) -> Any:
+        if isinstance(text, str):
+            # Remove illegal characters for Excel
+            return re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', text)
+        return text
 
     def _get(self, endpoint: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}.php"
@@ -93,6 +100,10 @@ class DramaboxScraper:
 
     def update_master_excel(self, drama_info: Dict[str, Any]):
         """Update a single drama record in the master excel file."""
+        # Clean data first
+        for key, value in drama_info.items():
+            drama_info[key] = self._clean_text(value)
+
         df = None
         if os.path.exists(self.master_excel):
             try:
@@ -312,12 +323,12 @@ class DramaboxScraper:
             watch_info = self.get_watch_info(drama_id, ep_index, lang)
             
             data_list.append({
-                "Drama ID": drama_id,
-                "Drama Title": drama_name,
-                "Introduction": intro,
-                "Tags": tags_str,
+                "Drama ID": self._clean_text(drama_id),
+                "Drama Title": self._clean_text(drama_name),
+                "Introduction": self._clean_text(intro),
+                "Tags": self._clean_text(tags_str),
                 "Episode Index": ep_index + 1,
-                "Episode Title": ep.get('chapterName', f'Episode {ep_index + 1}'),
+                "Episode Title": self._clean_text(ep.get('chapterName', f'Episode {ep_index + 1}')),
                 "Video URL": watch_info.get('videoUrl', 'Not Found') if watch_info else 'Error'
             })
         
@@ -365,12 +376,12 @@ class DramaboxScraper:
                     watch_info = self.get_watch_info(drama_id, ep_index, lang)
                     
                     all_data_list.append({
-                        "Drama ID": drama_id,
-                        "Drama Title": detail.get('bookName', ''),
-                        "Introduction": intro,
-                        "Tags": tags_str,
+                        "Drama ID": self._clean_text(drama_id),
+                        "Drama Title": self._clean_text(detail.get('bookName', '')),
+                        "Introduction": self._clean_text(intro),
+                        "Tags": self._clean_text(tags_str),
                         "Episode Index": ep_index + 1,
-                        "Episode Title": ep.get('chapterName', f'Episode {ep_index + 1}'),
+                        "Episode Title": self._clean_text(ep.get('chapterName', f'Episode {ep_index + 1}')),
                         "Video URL": watch_info.get('videoUrl', 'Not Found') if watch_info else 'Error'
                     })
                 print(f"\n  Done: {len(episodes)} episodes added.")
