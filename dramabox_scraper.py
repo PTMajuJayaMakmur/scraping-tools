@@ -10,6 +10,8 @@ from typing import List, Dict, Any, Optional
 # Load environment variables
 load_dotenv()
 
+import time
+
 class DramaboxScraper:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("DRAMABOX_API_KEY")
@@ -18,6 +20,12 @@ class DramaboxScraper:
         self.master_excel = "dramabox_master_list.xlsx"
         self.download_dir = "downloads"
         self.history = self._load_history()
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+            "Cache-Control": "no-cache"
+        }
         
         if not os.path.exists(self.download_dir):
             os.makedirs(self.download_dir)
@@ -47,29 +55,138 @@ class DramaboxScraper:
             params = {}
         params['api_key'] = self.api_key
         
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return data.get('data')
-            else:
-                print(f"Error from API: {data.get('message')}")
-        except Exception as e:
-            print(f"Request failed: {e}")
+        for attempt in range(5): # Increased to 5 attempts
+            try:
+                response = requests.get(url, params=params, headers=self.headers, timeout=30)
+                if response.status_code == 502:
+                    print(f"502 Bad Gateway at {url}, retrying ({attempt + 1}/5)...")
+                    time.sleep(3 * (attempt + 1)) # Slightly longer backoff
+                    continue
+                    
+                response.raise_for_status()
+                data = response.json()
+                if data.get('success'):
+                    return data.get('data') or data
+                else:
+                    # Don't print error if it's just 'not found' type error, might be expected
+                    if data.get('message') != "Data not found":
+                        print(f"Error from API: {data.get('message')}")
+                    return None
+            except Exception as e:
+                if attempt == 4:
+                    print(f"Request failed after 5 attempts: {url} - {e}")
+                else:
+                    time.sleep(2 * (attempt + 1))
         return None
 
-    def get_drama_list(self, page: int = 1, page_size: int = 20, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
+    def _post(self, endpoint: str, json_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        url = f"{self.base_url}{endpoint}.php"
+        params = {'api_key': self.api_key}
+        
+        for attempt in range(5):
+            try:
+                response = requests.post(url, params=params, json=json_data, headers=self.headers, timeout=30)
+                if response.status_code == 502:
+                    print(f"502 Bad Gateway at {url} (POST), retrying ({attempt + 1}/5)...")
+                    time.sleep(3 * (attempt + 1))
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+                if data.get('success'):
+                    return data.get('data') or data
+                else:
+                    print(f"Error from API (POST): {data.get('message')}")
+                    return None
+            except Exception as e:
+                if attempt == 4:
+                    print(f"POST request failed after 5 attempts: {url} - {e}")
+                else:
+                    time.sleep(2 * (attempt + 1))
+        return None
+
+    def get_drama_list(self, page: int = 1, page_size: int = 10, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
         data = self._get("new", {"page": page, "pageSize": page_size, "lang": lang})
         if data:
-            return data.get('list', []), data.get('isMore', False)
+            if isinstance(data, dict):
+                return data.get('list', []), data.get('isMore', False)
         return [], False
 
-    def get_drama_detail(self, drama_id: str, lang: str = "in") -> Optional[Dict[str, Any]]:
-        return self._get("drama", {"id": drama_id, "lang": lang})
+    def search_drama(self, query: str, page: int = 1, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
+        data = self._get("search", {"q": query, "page": page, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                return data.get('list', []), data.get('isMore', False)
+        return [], False
 
-    def get_watch_info(self, drama_id: str, index: int, lang: str = "in") -> Optional[Dict[str, Any]]:
-        return self._get("watch", {"id": drama_id, "index": index, "lang": lang, "source": "search_result"})
+    def get_ranking(self, page: int = 1, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
+        data = self._get("rank", {"page": page, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                return data.get('list', []), data.get('isMore', False)
+        return [], False
+
+    def get_foryou(self, page: int = 1, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
+        data = self._get("foryou", {"page": page, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                return data.get('list', []), data.get('isMore', False)
+        return [], False
+
+    def get_classify(self, genre: str, sort: int = 1, page: int = 1, lang: str = "in") -> tuple[List[Dict[str, Any]], bool]:
+        data = self._get("classify", {"genre": genre, "sort": sort, "pageNo": page, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                return data.get('list', []), data.get('isMore', False)
+        return [], False
+
+    def get_suggest(self, query: str, lang: str = "in") -> List[Dict[str, Any]]:
+        data = self._get("suggest", {"q": query, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                return data.get('list', [])
+        return []
+
+    def get_chapters(self, drama_id: str, lang: str = "in") -> Optional[Dict[str, Any]]:
+        """Fetch the chapter list and drama metadata from chapters.php."""
+        data = self._get("chapters", {"bookId": drama_id, "lang": lang})
+        if data:
+            if isinstance(data, dict):
+                # Ensure chapterList exists for consistency
+                if 'list' in data and 'chapterList' not in data:
+                    data['chapterList'] = data['list']
+                return data
+            elif isinstance(data, list):
+                return {"bookId": drama_id, "chapterList": data, "list": data}
+        return None
+
+    def get_drama_detail(self, drama_id: str, lang: str = "in") -> Optional[Dict[str, Any]]:
+        """
+        drama.php is deprecated/404. Using chapters.php as the primary source.
+        Returns a dict containing chapters and drama metadata.
+        """
+        return self.get_chapters(drama_id, lang)
+
+    def get_watch_info(self, drama_id: str, index: int, lang: str = "in", chapter_id: str = None) -> Optional[Dict[str, Any]]:
+        # Try watch.php first
+        res = self._get("watch", {
+            "bookId": drama_id, 
+            "chapterIndex": index, 
+            "lang": lang, 
+            "source": "search_result",
+            "raw": "true"
+        })
+        
+        # If watch.php fails (502 or empty after retries) and we have chapter_id, try player.php
+        if not res and chapter_id:
+            print(f"Watch failed/unstable for index {index}, trying player.php fallback...")
+            res = self.get_player_info(drama_id, chapter_id)
+            
+        return res
+
+    def get_player_info(self, book_id: str, chapter_id: str) -> Optional[Dict[str, Any]]:
+        # Example POST endpoint usage
+        return self._post("player", {"bookId": book_id, "chapterId": chapter_id})
 
     def download_file(self, url: str, folder: str, filename: str) -> bool:
         if not os.path.exists(folder):
@@ -148,24 +265,40 @@ class DramaboxScraper:
         except:
             return {}
 
-    def download_drama(self, drama_id: str, lang: str = "in", only_new: bool = False):
+    def download_drama(self, drama_id: str, lang: str = "in", only_new: bool = False, drama_info: Dict[str, Any] = None):
         detail = self.get_drama_detail(drama_id, lang)
         if not detail:
-            return
+            # If we have basic info passed from download_all, use it as fallback
+            if drama_info:
+                detail = drama_info.copy()
+                detail['chapterList'] = self.get_chapters(drama_id, lang).get('chapterList', [])
+            else:
+                return
         
-        drama_name = "".join(x for x in detail['bookName'] if x.isalnum() or x in " -_").strip()
+        # Merge drama_info if provided (it might have bookName while detail doesn't)
+        if drama_info:
+            for k, v in drama_info.items():
+                if k not in detail or not detail[k]:
+                    detail[k] = v
+
+        book_name = detail.get('bookName') or detail.get('title') or f"Drama_{drama_id}"
+        drama_name = "".join(x for x in book_name if x.isalnum() or x in " -_").strip()
         drama_folder = os.path.join(self.download_dir, f"{drama_id}_{drama_name}")
         
         if not os.path.exists(drama_folder):
             os.makedirs(drama_folder)
 
         # Download Cover
-        if detail.get('cover'):
-            self.download_file(detail['cover'], drama_folder, "cover.jpg")
+        cover_url = detail.get('cover') or detail.get('bookCover')
+        if cover_url:
+            self.download_file(cover_url, drama_folder, "cover.jpg")
 
         episodes = detail.get('chapterList', [])
+        if not episodes and 'list' in detail:
+            episodes = detail['list']
+            
         total_episodes = len(episodes)
-        print(f"Found {total_episodes} episodes for '{drama_name}'")
+        print(f"Found {total_episodes} episodes for '{book_name}'")
 
         new_episodes_found = False
         downloaded_count = 0
@@ -176,20 +309,22 @@ class DramaboxScraper:
                 downloaded_count += 1
 
         for ep in episodes:
-            ep_index = ep['chapterIndex']
-            ep_id = ep['chapterId']
+            ep_index = ep.get('chapterIndex')
+            if ep_index is None: continue # Skip if no index
+            
+            ep_id = str(ep.get('chapterId', ''))
             
             if only_new and ep_id in self.history['downloaded_episode_ids']:
                 continue
 
-            watch_info = self.get_watch_info(drama_id, ep_index, lang)
+            watch_info = self.get_watch_info(drama_id, ep_index, lang, chapter_id=ep_id)
             if watch_info and watch_info.get('videoUrl'):
                 filename = f"episode_{ep_index + 1}.mp4"
                 success = self.download_file(watch_info['videoUrl'], drama_folder, filename)
                 if success:
                     new_episodes_found = True
                     downloaded_count += 1
-                    if ep_id not in self.history['downloaded_episode_ids']:
+                    if ep_id and ep_id not in self.history['downloaded_episode_ids']:
                         self.history['downloaded_episode_ids'].append(ep_id)
         
         # Update Master Excel
@@ -198,7 +333,7 @@ class DramaboxScraper:
         
         self.update_master_excel({
             "ID": drama_id,
-            "Title": detail.get('bookName', ''),
+            "Title": book_name,
             "Introduction": detail.get('introduction', detail.get('bookIntroduction', '')),
             "Tags": tags_str,
             "Episodes Downloaded": downloaded_count,
@@ -210,7 +345,8 @@ class DramaboxScraper:
                 self.history['downloaded_drama_ids'].append(drama_id)
             self._save_history()
         else:
-            print(f"No new episodes for '{drama_name}'")
+            print(f"No new episodes for '{book_name}'")
+
 
     def download_all(self, lang: str = "in", only_new: bool = False):
         excel_history = self.get_excel_history() if only_new else {}
@@ -236,7 +372,7 @@ class DramaboxScraper:
                         print(f"Update found for '{drama['bookName']}': {downloaded_so_far} -> {api_ep_count} eps")
 
                 print(f"Processing Drama: {drama['bookName']}")
-                self.download_drama(drama_id, lang, only_new=only_new)
+                self.download_drama(drama_id, lang, only_new=only_new, drama_info=drama)
             
             page += 1
         print("Download process finished.")
@@ -319,8 +455,9 @@ class DramaboxScraper:
         
         for ep in episodes:
             ep_index = ep['chapterIndex']
+            ep_id = str(ep.get('chapterId', ''))
             print(f"  Fetching URL for Episode {ep_index + 1}/{len(episodes)}...", end='\r')
-            watch_info = self.get_watch_info(drama_id, ep_index, lang)
+            watch_info = self.get_watch_info(drama_id, ep_index, lang, chapter_id=ep_id)
             
             data_list.append({
                 "Drama ID": self._clean_text(drama_id),
@@ -372,8 +509,9 @@ class DramaboxScraper:
                 
                 for ep in episodes:
                     ep_index = ep['chapterIndex']
+                    ep_id = str(ep.get('chapterId', ''))
                     print(f"    Fetching URL for Episode {ep_index + 1}/{len(episodes)}...", end='\r')
-                    watch_info = self.get_watch_info(drama_id, ep_index, lang)
+                    watch_info = self.get_watch_info(drama_id, ep_index, lang, chapter_id=ep_id)
                     
                     all_data_list.append({
                         "Drama ID": self._clean_text(drama_id),
@@ -409,9 +547,12 @@ def main():
         print("4. Check Update (Download only new items)")
         print("5. Sync Folders to Excel & Refresh History")
         print("6. Export ALL Dramas + Video URLs (Loop all pages)")
-        print("7. Exit")
+        print("7. Search Drama")
+        print("8. Trending / Ranking")
+        print("9. For You / Recommendations")
+        print("10. Exit")
         
-        choice = input("Enter choice (1-7): ")
+        choice = input("Enter choice (1-10): ")
         
         if choice == '1':
             scraper.download_all()
@@ -430,6 +571,27 @@ def main():
         elif choice == '6':
             scraper.export_all_dramas_to_excel_with_urls()
         elif choice == '7':
+            query = input("Enter search query: ")
+            dramas, _ = scraper.search_drama(query)
+            if dramas:
+                print(f"\nResults for '{query}':")
+                for d in dramas:
+                    print(f"- [{d.get('bookId')}] {d.get('bookName')} ({d.get('chapterCount')} episodes)")
+            else:
+                print("No results found.")
+        elif choice == '8':
+            dramas, _ = scraper.get_ranking()
+            if dramas:
+                print("\nTrending / Ranking:")
+                for d in dramas:
+                    print(f"- [{d.get('bookId')}] {d.get('bookName')} ({d.get('chapterCount')} episodes)")
+        elif choice == '9':
+            dramas, _ = scraper.get_foryou()
+            if dramas:
+                print("\nFor You / Recommendations:")
+                for d in dramas:
+                    print(f"- [{d.get('bookId')}] {d.get('bookName')} ({d.get('chapterCount')} episodes)")
+        elif choice == '10':
             break
         else:
             print("Invalid choice.")
